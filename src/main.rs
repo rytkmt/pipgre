@@ -1,112 +1,91 @@
 use std::env;
-use failure::Error;
-use std::io::{self, Read};
+use std::io::{self, Read, Write, BufWriter, stdout};
+use std::process;
+use anyhow::Result;
 use atty::Stream;
-use std::io::{stdout, Write, BufWriter};
 
-// エイリアス
-pub type Result<T> = std::result::Result<T, Error>;
-
-fn is_pipe() -> bool {
-    // Terminalでなければ標準入力から読み込む
-    ! atty::is(Stream::Stdin)
+struct FilterOptions {
+    includes: Vec<String>,
+    excludes: Vec<String>,
 }
 
 fn read_from_stdin() -> Result<String> {
-    // パイプで渡されていなければヘルプ表示
-    if ! is_pipe() {
-        // 引数がなければヘルプ表示
-        panic!("required stdin from pipeline.");
+    if atty::is(Stream::Stdin) {
+        eprintln!("Usage: <command> | pipgre [options] [patterns]");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  <pattern>    Include lines containing pattern (AND)");
+        eprintln!("  -v <pattern> Exclude lines containing the next pattern");
+        eprintln!("  -V           Exclude mode: all following patterns are excludes");
+        eprintln!("  -G           Include mode: cancel -V, following patterns are includes");
+        process::exit(1);
     }
 
     let mut buf = String::new();
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    handle.read_to_string(&mut buf)?;
-
+    io::stdin().lock().read_to_string(&mut buf)?;
     Ok(buf)
 }
 
-fn separate_options(args: Vec<String>) -> Result<Vec<Vec<String>>> {
-    let mut is_v:bool = false;
-    let mut is_force_v:bool = false;
-    let mut excludes = Vec::<String>::new();
-    let mut includes = Vec::<String>::new();
+fn parse_options(args: Vec<String>) -> FilterOptions {
+    let mut exclude_mode = false;
+    let mut next_is_exclude = false;
+    let mut includes = Vec::new();
+    let mut excludes = Vec::new();
 
     for arg in args {
-        let arg_str: &str = arg.as_str();
-
-        match arg_str {
-            "-v" => is_v = true,
-            "-V" => is_force_v = true,
-            "-G" => is_force_v = false,
+        match arg.as_str() {
+            "-v" => next_is_exclude = true,
+            "-V" => {
+                exclude_mode = true;
+                next_is_exclude = false;
+            }
+            "-G" => {
+                exclude_mode = false;
+                next_is_exclude = false;
+            }
             _ => {
-                if is_v || is_force_v {
-                    excludes.push(arg_str.to_string());
+                if next_is_exclude || exclude_mode {
+                    excludes.push(arg);
                 } else {
-                    includes.push(arg_str.to_string());
+                    includes.push(arg);
                 }
-
-                is_v = false;
+                next_is_exclude = false;
             }
         }
     }
-    Ok(vec![includes, excludes])
+
+    FilterOptions { includes, excludes }
 }
 
-fn is_included(input: std::string::String, targets: Vec<String>) -> Result<bool> {
-    for target in targets {
-        if !input.contains(&target) { return Ok(false) }
-    }
-
-    Ok(true)
+fn matches_all(line: &str, patterns: &[String]) -> bool {
+    patterns.iter().all(|p| line.contains(p.as_str()))
 }
 
-fn is_excluded(input: std::string::String, targets: Vec<String>) -> Result<bool> {
-    for target in targets {
-        if input.contains(&target) { return Ok(false) }
-    }
-
-    Ok(true)
+fn matches_none(line: &str, patterns: &[String]) -> bool {
+    patterns.iter().all(|p| !line.contains(p.as_str()))
 }
 
-fn extract(input: std::string::String, includes: Vec<String>, excludes: Vec<String>) -> Result<Vec<String>> {
-    let mut remained_lines = Vec::<String>::new();
-
-    for line in input.lines() {
-        if is_included(line.to_string(), includes.clone())? && is_excluded(line.to_string(), excludes.clone())?{
-            remained_lines.push(line.to_string());
-        }
-    }
-    Ok(remained_lines)
+fn extract<'a>(input: &'a str, options: &FilterOptions) -> Vec<&'a str> {
+    input
+        .lines()
+        .filter(|line| matches_all(line, &options.includes) && matches_none(line, &options.excludes))
+        .collect()
 }
 
+fn main() -> Result<()> {
+    let input = read_from_stdin()?;
 
+    let mut args: Vec<String> = env::args().collect();
+    args.remove(0);
+    let options = parse_options(args);
 
-fn output(lines: Vec<String>) -> Result<()> {
+    let lines = extract(&input, &options);
+
     let out = stdout();
     let mut out = BufWriter::new(out.lock());
     for line in lines {
-        writeln!(out, "{}", line).unwrap();
+        writeln!(out, "{}", line)?;
     }
 
     Ok(())
 }
-
-fn main() -> Result<()>{
-    let targets: String = read_from_stdin()?;
-
-    let mut args: Vec<String> = env::args().collect();
-    //コマンド名部分は不要なので削除
-    args.remove(0);
-    let separated_options = separate_options(args)?;
-    let includes = &separated_options[0];
-    let excludes = &separated_options[1];
-
-    let extracted_lines: Vec<String> = extract(targets, includes.to_vec(), excludes.to_vec())?;
-
-    output(extracted_lines)?;
-
-    Ok(())
-}
-

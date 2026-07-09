@@ -1,12 +1,9 @@
 [package]
 name = "pipgre"
-version = "0.1.0"
-authors = ["r_tsukamoto <r_tsukamoto@ill.co.jp>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version = "0.2.0"
+authors = ["rytkmt <r12tkmt@gmail.com>"]
+edition = "2021"
 
 [dependencies]
-failure = "0.1"
-structopt = "0.2"
+anyhow = "1"
 atty = "0.2"
